@@ -8,10 +8,25 @@
 # 「.env」ファイルから環境変数を読み込むための関数
 from dotenv import load_dotenv
 load_dotenv()
-# ログ出力を行うためのモジュール
-import logging
+
+# 🔧 追加：環境変数を操作するため
+import os
+
 # streamlitアプリの表示を担当するモジュール
 import streamlit as st
+
+# 🔧 追加：Streamlit Cloud では Secrets を最優先で使用。
+#          下位のユーティリティが os.environ["OPENAI_API_KEY"] を参照しても動くように
+#          ここで環境変数に流し込みます。
+openai_key_from_secrets = st.secrets.get("OPENAI_API_KEY")
+if openai_key_from_secrets:
+    os.environ["OPENAI_API_KEY"] = openai_key_from_secrets
+
+# 🔧（任意）Streamlit のログに出ていた USER_AGENT 警告を抑止
+os.environ.setdefault("USER_AGENT", "company_inner_search_app/1.0")
+
+# ログ出力を行うためのモジュール
+import logging
 # （自作）画面表示以外の様々な関数が定義されているモジュール
 import utils
 # （自作）アプリ起動時に実行される初期化処理が記述された関数
