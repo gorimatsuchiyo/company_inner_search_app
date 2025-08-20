@@ -16,6 +16,15 @@ import streamlit as st
 from langchain_community.document_loaders import WebBaseLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
+# --- SQLite 3.35+ shim for Streamlit Cloud ---
+try:
+    import pysqlite3  # provided by pysqlite3-binary
+    import sys
+    sys.modules["sqlite3"] = pysqlite3
+    sys.modules["sqlite"] = pysqlite3
+except Exception:
+    pass
+# ---------------------------------------------
 from langchain_community.vectorstores import Chroma
 import constants as ct
 
