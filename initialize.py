@@ -35,6 +35,21 @@ for const in required_constants:
         raise AttributeError(f"Missing required constant '{const}' in constants.py")
 
 ############################################################
+# ユーティリティ
+############################################################
+def _get_secret(key: str, default=None):
+    """
+    Streamlit Secrets -> 環境変数 -> default の順で値を取得
+    """
+    try:
+        if hasattr(st, "secrets") and key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        # ローカルで st.secrets が未設定でも落ちないように
+        pass
+    return os.getenv(key, default)
+
+############################################################
 # 関数定義
 ############################################################
 
@@ -53,40 +68,43 @@ def initialize():
 
 def initialize_logger():
     """
-    ログ出力の設定
+    ログ出力の設定（書き込み不可の場合は /tmp/app_logs にフォールバック）
     """
-    # 指定のログフォルダが存在すれば読み込み、存在しなければ新規作成
-    os.makedirs(ct.LOG_DIR_PATH, exist_ok=True)
-    
-    # 引数に指定した名前のロガー（ログを記録するオブジェクト）を取得
-    # 再度別の箇所で呼び出した場合、すでに同じ名前のロガーが存在していれば読み込む
     logger = logging.getLogger(ct.LOGGER_NAME)
 
-    # 既存ハンドラーがある場合は重複設定を防ぐためreturn
+    # 既に設定済みなら再設定しない
     if logger.hasHandlers():
         return
 
-    # 1日単位でログファイルの中身をリセットし、切り替える設定
-    log_handler = TimedRotatingFileHandler(
-        os.path.join(ct.LOG_DIR_PATH, ct.LOG_FILE),
-        when="D",
-        encoding="utf8"
-    )
-    # 出力するログメッセージのフォーマット定義
-    session_id = st.session_state.get("session_id", "N/A")
-    formatter = logging.Formatter(
-        f"[%(levelname)s] %(asctime)s line %(lineno)s, in %(funcName)s, session_id={session_id}: %(message)s"
-    )
+    # 1) まず constants のパスを試す
+    log_dir = ct.LOG_DIR_PATH
+    log_path = os.path.join(log_dir, ct.LOG_FILE)
 
-    # 定義したフォーマッターの適用
-    log_handler.setFormatter(formatter)
+    def _try_setup(target_dir, target_file):
+        os.makedirs(target_dir, exist_ok=True)
+        handler = TimedRotatingFileHandler(
+            target_file, when="D", encoding="utf8"
+        )
+        # セッションIDをフォーマットに入れておく
+        session_id = st.session_state.get("session_id", "N/A")
+        formatter = logging.Formatter(
+            f"[%(levelname)s] %(asctime)s line %(lineno)s, in %(funcName)s, session_id={session_id}: %(message)s"
+        )
+        handler.setFormatter(formatter)
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
 
-    # ログレベルを「INFO」に設定
-    logger.setLevel(logging.INFO)
+    try:
+        _try_setup(log_dir, log_path)
+    except Exception:
+        # 2) 失敗したら /tmp/app_logs に切替
+        fallback_dir = "/tmp/app_logs"
+        fallback_path = os.path.join(fallback_dir, ct.LOG_FILE)
+        os.makedirs(fallback_dir, exist_ok=True)
+        _try_setup(fallback_dir, fallback_path)
 
-    # 作成したハンドラー（ログ出力先を制御するオブジェクト）を、
-    # ロガー（ログメッセージを実際に生成するオブジェクト）に追加してログ出力の最終設定
-    logger.addHandler(log_handler)
+    # 右側ログにも出したいとき（Cloudのログパネル）
+    logger.addHandler(logging.StreamHandler())
 
 def initialize_session_id():
     """
@@ -105,13 +123,20 @@ def initialize_retriever():
         doc.page_content = adjust_string(doc.page_content)
         for key in doc.metadata:
             doc.metadata[key] = adjust_string(doc.metadata[key])
-    
-    embeddings = OpenAIEmbeddings()
-    
+
+    # ★ Secrets/環境変数から OPENAI_API_KEY を確実に渡す
+    openai_api_key = _get_secret("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise RuntimeError(
+            "OPENAI_API_KEY が見つかりません。Streamlit Cloud の Secrets か .env に設定してください。"
+        )
+
+    embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+
     # CSVファイルは統合処理済みなので、そのまま使用
     # その他のファイルのみテキスト分割を適用
     final_docs = []
-    
+
     for doc in docs_all:
         # CSVファイルの場合は分割せずにそのまま使用
         if doc.metadata.get("file_type") == "csv":
@@ -123,10 +148,10 @@ def initialize_retriever():
                 chunk_overlap=ct.CHUNK_OVERLAP,
                 separator="\n"
             )
-            
+
             page_number = doc.metadata.get("page", None)
             chunks = text_splitter.split_text(doc.page_content)
-            
+
             for chunk in chunks:
                 new_meta = doc.metadata.copy()
                 if page_number is not None:
@@ -219,17 +244,17 @@ def file_load(path, docs_all):
             try:
                 # CSVファイルを読み込み
                 df = pd.read_csv(path, encoding='utf-8')
-                
+
                 # ファイル名から内容を推測してドキュメントを構築
                 file_name = os.path.basename(path)
-                
+
                 if "社員名簿" in file_name or "従業員" in file_name:
                     # 社員名簿の場合の特別処理
                     content = create_employee_document(df, file_name)
                 else:
                     # その他のCSVファイルの場合の汎用処理
                     content = create_generic_csv_document(df, file_name)
-                
+
                 # 統合されたドキュメントを作成
                 doc = Document(
                     page_content=content,
@@ -241,7 +266,7 @@ def file_load(path, docs_all):
                     }
                 )
                 docs_all.append(doc)
-                
+
             except Exception as e:
                 logger = logging.getLogger(ct.LOGGER_NAME)
                 logger.error(f"Error loading CSV file '{path}': {e}")
@@ -275,106 +300,99 @@ def create_employee_document(df, file_name):
     社員名簿CSVから検索に適したドキュメントを作成
     """
     content_parts = []
-    
+
     # ファイルの概要情報（検索キーワードを強化）
     content_parts.append(f"【{file_name} - 社員名簿・従業員一覧・人事データベース】")
     content_parts.append(f"全社員数: {len(df)}名の従業員情報")
     content_parts.append("")
-    
+
     # 部署別の詳細情報（人事部の情報を特に強調）
     if '従業員区分' in df.columns:
         dept_groups = df.groupby('従業員区分')
         content_parts.append("【部署別従業員詳細情報】")
-        
+
         for dept_name, dept_df in dept_groups:
             content_parts.append(f"\n■ {dept_name}部門 ({len(dept_df)}名)")
             content_parts.append(f"{dept_name}に所属している従業員一覧:")
-            
+
             for idx, (_, row) in enumerate(dept_df.iterrows(), 1):
                 employee_details = []
                 for col in dept_df.columns:
                     if pd.notna(row[col]) and str(row[col]).strip() and col != '従業員区分':
                         employee_details.append(f"{col}:{row[col]}")
-                
+
                 if employee_details:
                     content_parts.append(f"  {idx}. {', '.join(employee_details)}")
-        
+
         content_parts.append("")
-    
+
     # 人事部専用の検索最適化セクション
     hr_employees = df[df['従業員区分'] == '人事部'] if '従業員区分' in df.columns else pd.DataFrame()
     if not hr_employees.empty:
         content_parts.append("【人事部所属従業員の完全一覧】")
         content_parts.append(f"人事部には{len(hr_employees)}名の従業員が所属しています。")
         content_parts.append("人事部メンバー詳細:")
-        
+
         for idx, (_, row) in enumerate(hr_employees.iterrows(), 1):
             hr_details = []
             for col in hr_employees.columns:
                 if pd.notna(row[col]) and str(row[col]).strip():
                     hr_details.append(f"{col}:{row[col]}")
-            
+
             if hr_details:
                 content_parts.append(f"人事部員{idx}: {', '.join(hr_details)}")
-        
+
         content_parts.append("")
-    
+
     # 全従業員の統合リスト
     content_parts.append("【全従業員統合データ】")
     content_parts.append("社内の全従業員情報:")
-    
+
     for index, row in df.iterrows():
         employee_info = []
         for col in df.columns:
             if pd.notna(row[col]) and str(row[col]).strip():
                 employee_info.append(f"{col}:{row[col]}")
-        
+
         if employee_info:
             content_parts.append(f"社員{index + 1}: {', '.join(employee_info)}")
-    
+
     # 検索用キーワードを大幅に強化
     content_parts.append("\n【検索最適化キーワード】")
     keywords = [
-        "従業員情報", "社員名簿", "人事部", "社員一覧", "従業員一覧", 
+        "従業員情報", "社員名簿", "人事部", "社員一覧", "従業員一覧",
         "社員データ", "人事データ", "社員情報", "従業員データベース",
         "社員リスト", "従業員リスト", "人事情報", "社員台帳"
     ]
-    
+
     # 部署名もキーワードに追加
     if '従業員区分' in df.columns:
         unique_depts = df['従業員区分'].dropna().unique()
         for dept in unique_depts:
             keywords.extend([f"{dept}", f"{dept}部", f"{dept}所属", f"{dept}の従業員"])
-    
+
     content_parts.append(f"関連キーワード: {', '.join(keywords)}")
-    
+
     return "\n".join(content_parts)
 
 
 def create_generic_csv_document(df, file_name):
     """
     一般的なCSVファイルから検索に適したドキュメントを作成
-    
-    Args:
-        df: pandas DataFrame
-        file_name: ファイル名
-        
-    Returns:
-        検索に適した統合テキスト
     """
     content_parts = []
-    
+
     # ファイルの概要情報
     content_parts.append(f"【{file_name}】")
     content_parts.append(f"データ件数: {len(df)}件")
     content_parts.append(f"項目数: {len(df.columns)}項目")
     content_parts.append("")
-    
+
     # 列名の情報
     content_parts.append("【データ項目】")
     content_parts.append(", ".join(df.columns.tolist()))
     content_parts.append("")
-    
+
     # データの内容
     content_parts.append("【データ内容】")
     for index, row in df.iterrows():
@@ -382,21 +400,15 @@ def create_generic_csv_document(df, file_name):
         for col in df.columns:
             if pd.notna(row[col]) and str(row[col]).strip():
                 row_info.append(f"{col}: {row[col]}")
-        
+
         if row_info:
             content_parts.append(f"{index + 1}. " + ", ".join(row_info))
-    
+
     return "\n".join(content_parts)
 
 def adjust_string(s):
     """
     Windows環境でRAGが正常動作するよう調整
-    
-    Args:
-        s: 調整を行う文字列
-    
-    Returns:
-        調整を行った文字列
     """
     # 調整対象は文字列のみ
     if type(s) is not str:
@@ -407,6 +419,6 @@ def adjust_string(s):
         s = unicodedata.normalize('NFC', s)
         s = s.encode("cp932", "ignore").decode("cp932")
         return s
-    
+
     # OSがWindows以外の場合はそのまま返す
     return s
