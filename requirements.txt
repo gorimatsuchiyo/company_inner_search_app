@@ -10,7 +10,6 @@ backoff==2.2.1
 bcrypt==4.2.1
 beautifulsoup4==4.13.3
 blinker==1.9.0
-bs4==0.0.2
 build==1.2.2.post1
 cachetools==5.5.1
 certifi==2024.12.14
@@ -61,7 +60,7 @@ langchain-openai==0.3.3
 langchain-text-splitters==0.3.5
 langsmith==0.3.3
 lxml==5.3.1
-markdown-it-py==3.0.0
+markdown-it-py>=3,<5
 MarkupSafe==3.0.2
 marshmallow==3.26.0
 mdurl==0.1.2
@@ -100,23 +99,22 @@ pydantic==2.10.6
 pydantic-settings==2.7.1
 pydantic_core==2.27.2
 pydeck==0.9.1
-Pygments==2.19.1
+Pygments>=2.13,<3
 PyMuPDF==1.25.2
 PyPika==0.48.9
 pyproject_hooks==1.2.0
-pyreadline3==3.5.4
+pyreadline3; sys_platform == "win32"
 python-dateutil==2.9.0.post0
 python-docx==1.1.2
 python-dotenv==1.0.1
 pytz==2024.2
-pywin32==311
+pywin32>=306; sys_platform == "win32"
 PyYAML==6.0.2
 referencing==0.36.2
 regex==2024.11.6
 requests==2.32.3
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0
-rich==13.9.4
 rpds-py==0.22.3
 rsa==4.9
 shellingham==1.5.4
